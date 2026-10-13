@@ -3587,6 +3587,9 @@ class AgentManager:
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
         from octop.infra.agents.middleware.token_quota import TokenQuotaMiddleware
         from octop.infra.agents.middleware.tool_loop_guard import ToolLoopGuardMiddleware
+        from octop.infra.agents.middleware.workspace_root_alias import (
+            WorkspaceRootAliasMiddleware,
+        )
         from octop.infra.agents.middleware.workspace_image import (
             WorkspaceImageMaterializeMiddleware,
         )
@@ -3602,8 +3605,12 @@ class AgentManager:
         # ToolLoopGuard is outermost so it observes the final ToolMessage from every
         # inner middleware (guards, plugin tools, the handler itself) and can count a
         # streak regardless of which layer produced the error.
+        # WorkspaceRootAlias stays inside the guard for the same reason: the guard
+        # must see the arguments the model actually emitted, or a repeated `ls "/"`
+        # would be normalised to `ls "."` and escape the repeat detection.
         agent_middleware: list[Any] = [
             ToolLoopGuardMiddleware(),
+            WorkspaceRootAliasMiddleware(),
             *plugin_middleware,
             TokenQuotaMiddleware(
                 policy_repo=self._repos.user_policy_repo,
