@@ -1,0 +1,37 @@
+--- /tmp/opencode/workspace.py.orig	2026-10-13 22:57:08.669776510 +0800
++++ .venv/lib/python3.12/site-packages/octop_harness/backends/workspace.py	2026-10-13 22:59:33.786252559 +0800
+@@ -473,6 +473,13 @@
+                 raise TypeError(msg)
+             path = default
+         s = str(path)
++        if s.strip() == "/":
++            # A bare "/" is what models mean by "the workspace root"; the host
++            # root is almost never the intent. Returning it meant `ls /` listed
++            # the whole host filesystem, so the model learned nothing and retried
++            # (observed: 113 identical calls). Normalising routes it through the
++            # workspace branch below.
++            s = "."
+         if s.startswith("~"):
+             return str(Path(s).expanduser().resolve())
+         if s.startswith("/"):
+@@ -525,6 +532,10 @@
+                 raise TypeError(msg)
+             path = default
+         s = str(path).strip()
++        if s == "/":
++            # Without this, "/" maps to the host root as a backend storage key and
++            # list_dir() lists the host filesystem instead of the workspace.
++            s = "."
+         if s.startswith("~"):
+             expanded = str(Path(s).expanduser().resolve())
+             return self._remap_cloud_absolute(expanded) if is_cloud_storage_backend(self._backend) else expanded
+@@ -687,6 +698,9 @@
+             add(Path(raw).expanduser())
+             return out
+ 
++        if raw.strip() == "/":
++            raw = "."
++
+         if raw.startswith("/"):
+             if virtual:
+                 resolve_fn = getattr(self._backend, "_resolve_path", None)
