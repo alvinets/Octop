@@ -39,5 +39,16 @@ def test_file_url_always_host_absolute() -> None:
     )
 
 
-def test_default_from_workspace_is_false() -> None:
-    assert _workspace_io_path("/Users/me/a.pptx") == "/Users/me/a.pptx"
+def test_default_from_workspace_is_true() -> None:
+    # Workspace-scoped by default: a caller that forgets from_workspace must not
+    # silently resolve `/…` against the host filesystem.
+    assert _workspace_io_path("/Users/me/a.pptx") == "Users/me/a.pptx"
+    assert _workspace_io_path("/logo.png") == "logo.png"
+    assert _workspace_io_path("/") == "."
+
+
+def test_host_absolute_requires_explicit_opt_out() -> None:
+    assert (
+        _workspace_io_path("/home/kzhy/file.docx", from_workspace=False)
+        == "/home/kzhy/file.docx"
+    )

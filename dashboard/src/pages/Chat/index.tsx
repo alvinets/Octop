@@ -50,7 +50,7 @@ import {
   shouldJumpToChromeInstall,
   WORKBENCH_BROWSER_PATH,
 } from "./utils/chromeInstallGate";
-import { isFileToolName } from "./constants";
+import { isArtifactToolName } from "./constants";
 import { browserApi } from "../../api/modules/browser";
 import { octopThreadsApi } from "../../api/modules/octopThreads";
 import type { TokenUsage } from "../../api/types";
@@ -336,7 +336,7 @@ function ChatPageInner() {
       if (event.sessionId !== key || !resolvedAgentId || key === "__empty__") {
         return;
       }
-      if (!isFileToolName(event.toolName)) return;
+      if (!isArtifactToolName(event.toolName)) return;
       void fetchAndSyncSessionArtifacts(resolvedAgentId, key);
     });
   }, [activeThreadId, resolvedAgentId]);

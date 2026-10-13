@@ -28,8 +28,17 @@ ARTIFACT_TOOL_BASES = frozenset(
         "send_file_to_user",
         "desktop_screenshot",
         "mobile_screenshot",
+        "execute",
+        "execute_shell_command",
     }
 )
+
+# Shell tools report paths as free stdout text rather than a structured arg, so a
+# mention in the output is weak evidence on its own: an error message quoting the
+# command line, or a compile error echoing an import path, would otherwise mint an
+# artifact for a file the run never produced. Paths from these tools are accepted
+# only when the file actually exists under the workspace.
+_TEXT_SOURCED_TOOL_BASES = frozenset({"execute", "execute_shell_command"})
 
 _PATH_KEYS = (
     "path",
@@ -117,10 +126,11 @@ def extract_artifact_paths(
     if not is_artifact_tool_name(tool_name):
         return []
     ws = workspace_dir.expanduser() if workspace_dir is not None else None
+    require_existing = tool_name_base(tool_name).lower() in _TEXT_SOURCED_TOOL_BASES
     from_args = _dedupe_paths(_paths_from_args(args), ws)
     if from_args:
         return from_args
-    return _dedupe_paths(_paths_from_content(result), ws)
+    return _dedupe_paths(_paths_from_content(result), ws, require_existing=require_existing)
 
 
 def artifacts_for_response(
@@ -198,7 +208,27 @@ def thread_artifacts_payload(
     }
 
 
-def _dedupe_paths(paths: Sequence[str], workspace_dir: Path | None) -> list[str]:
+def _exists_under_workspace(resolved: str, workspace_dir: Path) -> bool:
+    ws = workspace_dir.expanduser()
+    try:
+        cand = Path(resolved)
+        if not cand.is_absolute():
+            cand = ws / cand
+        cand = cand.resolve()
+        root = ws.resolve()
+    except OSError:
+        return False
+    if cand != root and root not in cand.parents:
+        return False
+    return cand.is_file()
+
+
+def _dedupe_paths(
+    paths: Sequence[str],
+    workspace_dir: Path | None,
+    *,
+    require_existing: bool = False,
+) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for raw in paths:
@@ -211,6 +241,8 @@ def _dedupe_paths(paths: Sequence[str], workspace_dir: Path | None) -> list[str]
             continue
         resolved = normalize_artifact_path(raw, workspace_dir)
         if not resolved:
+            continue
+        if require_existing and not _exists_under_workspace(resolved, workspace_dir):
             continue
         dedupe_key = resolved.casefold() if os.name == "nt" else resolved
         if dedupe_key in seen:
