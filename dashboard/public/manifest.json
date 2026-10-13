@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Octop",
-  "short_name": "Octop",
-  "description": "Smarter self-hosted AI assistant — multi-user, multi-agent",
+  "name": "Hao Wise",
+  "short_name": "Hao Wise",
+  "description": "Smarter self-hosted AI assistant \u2014 multi-user, multi-agent",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -37,5 +37,8 @@
       "purpose": "any"
     }
   ],
-  "categories": ["productivity", "utilities"]
+  "categories": [
+    "productivity",
+    "utilities"
+  ]
 }

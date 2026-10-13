@@ -204,9 +204,9 @@ def normalize_workspace_download_path(path: str) -> str:
 def workspace_download_url(agent_id: str, workspace_path: str) -> str:
     """Build a dashboard download URL for a workspace or host-absolute path.
 
-    Absolute / ``file://`` paths are passed through (``from_workspace=false``
-    default treats leading ``/`` as host-absolute). Relative workspace keys
-    are passed without a leading slash so they stay workspace-relative.
+    The workspace API is workspace-scoped by default, so host-absolute paths must
+    opt out explicitly with ``from_workspace=false`` — otherwise a leading ``/``
+    would be re-read as workspace-relative and the file would 404.
     """
     raw = workspace_path.strip()
     if (
@@ -216,11 +216,14 @@ def workspace_download_url(agent_id: str, workspace_path: str) -> str:
         or raw.startswith("\\\\")
     ):
         path_param = raw
+        scope = "from_workspace=false"
     else:
         rel = extract_workspace_rel(raw) or raw.lstrip("/")
         path_param = rel
+        scope = "from_workspace=true"
     return (
-        f"/api/agents/{agent_id}/workspace/download?path={urllib.parse.quote(path_param, safe='')}"
+        f"/api/agents/{agent_id}/workspace/download"
+        f"?path={urllib.parse.quote(path_param, safe='')}&{scope}"
     )
 
 

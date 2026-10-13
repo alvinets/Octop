@@ -3211,6 +3211,7 @@ class AgentManager:
         from octop.infra.agents.middleware.reasoning import ReasoningRequestMiddleware
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
         from octop.infra.agents.middleware.token_quota import TokenQuotaMiddleware
+        from octop.infra.agents.middleware.tool_loop_guard import ToolLoopGuardMiddleware
         from octop.infra.agents.middleware.workspace_image import (
             WorkspaceImageMaterializeMiddleware,
         )
@@ -3223,7 +3224,11 @@ class AgentManager:
         # OctopUiOffload stays innermost so every outer middleware observes the
         # slimmed content consistently; it only touches octop_ui plugin envelopes,
         # disjoint from the file-tool results ThreadArtifacts cares about.
+        # ToolLoopGuard is outermost so it observes the final ToolMessage from every
+        # inner middleware (guards, plugin tools, the handler itself) and can count a
+        # streak regardless of which layer produced the error.
         agent_middleware: list[Any] = [
+            ToolLoopGuardMiddleware(),
             *plugin_middleware,
             TokenQuotaMiddleware(
                 policy_repo=self._repos.user_policy_repo,

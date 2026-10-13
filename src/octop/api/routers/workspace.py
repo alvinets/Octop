@@ -84,18 +84,27 @@ def _agent_id_from_media_source(source: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _workspace_io_path(path: str, *, from_workspace: bool = False) -> str:
+def _workspace_io_path(path: str, *, from_workspace: bool = True, user: Any = None) -> str:
     """Resolve an API path for ``BackendWorkspace``.
 
     ``file://`` is always a host absolute path.
 
-    When ``from_workspace`` is true (workspace UI): leading ``/`` is relative to
-    the agent workspace dir (``/logo.png`` → ``logo.png``).
+    When ``from_workspace`` is true (default): leading ``/`` is relative to the
+    agent workspace dir (``/logo.png`` → ``logo.png``). Paths never escape the
+    agent workspace, so a missing flag cannot silently widen the blast radius to
+    the host filesystem.
 
-    When false (default, chat/tool downloads): leading ``/`` is a host
-    filesystem absolute (``/Users/…``, ``/root/…``). Paths without a leading
-    ``/`` stay workspace-relative (``outbound/a.pptx``).
+    When false: leading ``/`` is a host filesystem absolute (``/Users/…``,
+    ``/root/…``). Paths without a leading ``/`` stay workspace-relative
+    (``outbound/a.pptx``). Escaping the workspace is an admin-only capability —
+    a non-admin caller passing ``from_workspace=false`` is rejected rather than
+    silently downgraded, so the flag cannot become a silent no-op.
     """
+    if not from_workspace and user is not None and not getattr(user, "is_admin", False):
+        raise OctopError(
+            ErrorCode.FORBIDDEN,
+            "host-absolute workspace paths require the admin role",
+        )
     raw = path.strip()
     if raw.startswith("file://"):
         resolved = backend_workspace_path(raw)
@@ -110,8 +119,8 @@ def _workspace_io_path(path: str, *, from_workspace: bool = False) -> str:
 
 
 _FROM_WORKSPACE_DESC = (
-    "When true, leading '/' paths are workspace-relative (workspace UI). "
-    "When false (default), leading '/' is host-absolute."
+    "True (default): leading '/' paths are workspace-relative and confined to the "
+    "agent workspace. False (opt-in): leading '/' is host-absolute."
 )
 
 
@@ -122,7 +131,7 @@ router = APIRouter()
 async def list_tree(
     agent_id: str,
     path: str = "/",
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -131,7 +140,7 @@ async def list_tree(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
-    io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    io_path = _workspace_io_path(path, from_workspace=from_workspace, user=user)
     result = await ws.als(io_path)
     if result is None:
         raise OctopError(ErrorCode.NOT_FOUND, f"cannot list {path!r}")
@@ -157,14 +166,16 @@ class WriteDocBody(BaseModel):
 async def read_file(
     agent_id: str,
     path: str,
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     """Read a UTF-8 text file."""
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
-    content = await ws.aread_text(_workspace_io_path(path, from_workspace=from_workspace))
+    content = await ws.aread_text(
+        _workspace_io_path(path, from_workspace=from_workspace, user=user)
+    )
     if content is None:
         raise OctopError(ErrorCode.NOT_FOUND, f"cannot read {path!r}")
     return {"path": path, "content": coerce_read_content(content)}
@@ -175,7 +186,7 @@ async def write_file(
     agent_id: str,
     body: WriteFileBody,
     path: str,
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -200,7 +211,9 @@ async def write_file(
     else:
         data = body.content.encode("utf-8")
     try:
-        await ws.aupload_bytes(_workspace_io_path(path, from_workspace=from_workspace), data)
+        await ws.aupload_bytes(
+            _workspace_io_path(path, from_workspace=from_workspace, user=user), data
+        )
     except Exception as exc:
         raise OctopError(ErrorCode.NOT_FOUND, f"cannot write {path!r}: {exc}") from exc
     return {"path": path, "size": len(data)}
@@ -306,7 +319,7 @@ async def upload_file(
     agent_id: str,
     file: UploadFile = File(...),  # noqa: B008
     path: str | None = Query(default=None),
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -319,7 +332,7 @@ async def upload_file(
     data = await file.read()
     try:
         await ws.aupload_bytes(
-            _workspace_io_path(target, from_workspace=from_workspace),
+            _workspace_io_path(target, from_workspace=from_workspace, user=user),
             data,
         )
     except Exception as exc:
@@ -331,7 +344,7 @@ async def upload_file(
 async def download_file(
     agent_id: str,
     path: str,
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -344,7 +357,7 @@ async def download_file(
     sensitive system roots (``/etc``, ``.harness-browser``, ``.octop-browser``, Windows system dirs).
     """
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
-    io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    io_path = _workspace_io_path(path, from_workspace=from_workspace, user=user)
     if is_host_absolute_path(io_path) and not is_allowed_host_download_abs_path(
         io_path,
         workspace=ws.workspace_dir,
@@ -370,7 +383,7 @@ async def download_file(
 async def read_doc(
     agent_id: str,
     path: str,
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -378,7 +391,7 @@ async def read_doc(
     """Read an editable document (e.g. ``.docx``) as Markdown for online editing."""
     converter = _ensure_editable_doc(path)
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
-    io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    io_path = _workspace_io_path(path, from_workspace=from_workspace, user=user)
     try:
         blob = await ws.adownload_bytes(io_path)
     except PermissionError as exc:
@@ -470,7 +483,7 @@ async def glob_files(
     agent_id: str,
     pattern: str,
     path: str = "/",
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -478,7 +491,7 @@ async def glob_files(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
-    root = _workspace_io_path(path, from_workspace=from_workspace)
+    root = _workspace_io_path(path, from_workspace=from_workspace, user=user)
     if pattern in ("**/*.md", "*.md") and root == ".":
         ls_result = await ws.als(".")
         if ls_result is None:
@@ -505,7 +518,7 @@ async def grep_files(
     agent_id: str,
     pattern: str,
     path: str = "/",
-    from_workspace: bool = Query(default=False, description=_FROM_WORKSPACE_DESC),
+    from_workspace: bool = Query(default=True, description=_FROM_WORKSPACE_DESC),
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
@@ -513,7 +526,9 @@ async def grep_files(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
-    result = await ws.agrep(pattern, _workspace_io_path(path, from_workspace=from_workspace))
+    result = await ws.agrep(
+        pattern, _workspace_io_path(path, from_workspace=from_workspace, user=user)
+    )
     if result is None:
         raise OctopError(ErrorCode.NOT_FOUND, "grep failed")
     matches = getattr(result, "matches", None) or []

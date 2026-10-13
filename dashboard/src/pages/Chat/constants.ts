@@ -9,6 +9,20 @@ export const FILE_TOOL_NAMES = [
   "send_file_to_user",
 ] as const;
 
+/**
+ * Tools whose completion can add thread artifacts, which is a wider set than
+ * {@link FILE_TOOL_NAMES}: a shell command can leave a new file behind even
+ * though it is not itself a file-edit tool. Kept separate so the dock refetches
+ * after any of them without also counting them as "files edited this turn",
+ * which would inflate the file count and surface an edit affordance on every
+ * shell call.
+ */
+export const ARTIFACT_TOOL_NAMES = [
+  ...FILE_TOOL_NAMES,
+  "execute",
+  "execute_shell_command",
+] as const;
+
 export const EMPTY_CHAT_SESSION_KEY = "__empty__";
 export const PENDING_THREAD_ID = "__pending__";
 
@@ -31,4 +45,10 @@ export function isFileToolName(name: string | undefined): boolean {
 /** Alias kept for call sites that mean "opens the chat file panel card". */
 export function isWriteToolName(name: string | undefined): boolean {
   return isFileToolName(name);
+}
+
+/** True when completing this tool can add thread artifacts (superset of {@link isFileToolName}). */
+export function isArtifactToolName(name: string | undefined): boolean {
+  const base = toolNameBase((name ?? "").trim()).toLowerCase();
+  return (ARTIFACT_TOOL_NAMES as readonly string[]).includes(base);
 }
