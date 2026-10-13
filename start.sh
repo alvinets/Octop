@@ -67,6 +67,13 @@ if [[ -n "$existing" ]]; then
     exit 0
 fi
 
+# `uv sync` and friends replace site-packages and silently drop the local
+# octop-harness patch, so the workspace-root fix would quietly disappear.
+if [[ -x "$PROJECT_DIR/harness-patches/reapply.sh" ]]; then
+    "$PROJECT_DIR/harness-patches/reapply.sh" --check >/dev/null 2>&1 || warn \
+        "octop-harness patch is NOT applied (uv sync resets it) — run: make harness-patch"
+fi
+
 # A foreign process holding the port would make uvicorn die with an opaque
 # address-in-use traceback; name the culprit instead.
 if command -v ss >/dev/null 2>&1; then
