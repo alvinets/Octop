@@ -83,6 +83,7 @@ help:
 	@echo "  install          Install Python dev dependencies (alias: install-dev)"
 	@echo "  install-dev      uv sync / pip install -e \".[dev]\""
 	@echo "  install-tools    Install build + twine for publishing"
+	@echo "  harness-patch    Re-apply local octop-harness patches (needed after every uv sync)"
 	@echo "  clean            Remove build artifacts and caches"
 	@echo "  clean-online     Remove the .venv-online environment"
 	@echo "  version          Show current project version"
@@ -299,6 +300,20 @@ install-hooks:
 	@echo "[install-hooks] Done. Pre-commit will run: make precommit (format-all + lint + typecheck + testmon-scoped tests), dashboard build"
 	@echo "[install-hooks] Bypass: SKIP_PRECOMMIT=1 git commit …   or   git commit --no-verify"
 
+.PHONY: harness-patch
+harness-patch:
+	@if [ -d "$(REPO_ROOT)/harness-patches" ]; then \
+		"$(REPO_ROOT)/harness-patches/reapply.sh"; \
+	else \
+		echo "[harness-patch] no harness-patches/ in this checkout — nothing to apply"; \
+	fi
+
+.PHONY: check-harness-patch
+check-harness-patch:
+	@if [ -d "$(REPO_ROOT)/harness-patches" ]; then \
+		"$(REPO_ROOT)/harness-patches/reapply.sh" --check; \
+	fi
+
 .PHONY: install install-dev
 install install-dev:
 	@echo "[install] Installing Python dev dependencies..."
@@ -307,6 +322,7 @@ ifdef UV
 else
 	$(PIP) install -e ".[dev]"
 endif
+	@$(MAKE) --no-print-directory harness-patch
 
 .PHONY: install-tools
 install-tools:
