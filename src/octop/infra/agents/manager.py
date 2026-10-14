@@ -3587,11 +3587,11 @@ class AgentManager:
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
         from octop.infra.agents.middleware.token_quota import TokenQuotaMiddleware
         from octop.infra.agents.middleware.tool_loop_guard import ToolLoopGuardMiddleware
-        from octop.infra.agents.middleware.workspace_root_alias import (
-            WorkspaceRootAliasMiddleware,
-        )
         from octop.infra.agents.middleware.workspace_image import (
             WorkspaceImageMaterializeMiddleware,
+        )
+        from octop.infra.agents.middleware.workspace_root_alias import (
+            WorkspaceRootAliasMiddleware,
         )
         from octop.infra.knowledge.hint import KnowledgeSearchHintMiddleware
 
