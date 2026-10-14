@@ -7,7 +7,10 @@ from typing import Any
 import pytest
 from langchain_core.messages import ToolMessage
 
-from octop.infra.agents.middleware.tool_loop_guard import ToolLoopGuardMiddleware
+from octop.infra.agents.middleware.tool_loop_guard import (
+    ToolLoopAbort,
+    ToolLoopGuardMiddleware,
+)
 
 _ERR = "send_file_to_user: no such file: /"
 _OK = "['/boot/', '/etc/', '/home/']"
@@ -44,7 +47,7 @@ async def test_suppresses_repeat_after_threshold() -> None:
 
     assert len(calls) == 3
     assert all(r.status == "error" for r in results)
-    assert "will not change the answer" in str(results[-1].content)
+    assert "cannot produce a different answer" in str(results[-1].content)
 
 
 @pytest.mark.asyncio
@@ -64,7 +67,7 @@ async def test_suppresses_identical_successful_calls() -> None:
     assert len(calls) == 3
     blocked = results[-1]
     assert blocked.status == "error"
-    assert "HOST" in str(blocked.content)
+    assert "already been called" in str(blocked.content)
 
 
 @pytest.mark.asyncio
@@ -122,3 +125,53 @@ async def test_arg_key_order_is_not_a_distinct_signature() -> None:
     await guard.awrap_tool_call(_request("t", {"b": 2, "a": 1}, "c1"), h)
     await guard.awrap_tool_call(_request("t", {"a": 1, "b": 2}, "c2"), h)
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_aborts_turn_after_max_blocks() -> None:
+    """Stage 2: refusals alone do not stop a degenerate model — the turn must end."""
+    guard = ToolLoopGuardMiddleware(threshold=3, max_blocks=5)
+    calls: list[str] = []
+    h = _handler(calls, content=_OK, status="success")
+
+    refusals = 0
+    with pytest.raises(ToolLoopAbort):
+        for i in range(50):
+            await guard.awrap_tool_call(_request("ls", {"path": "/"}, f"c{i}"), h)
+            refusals += 1
+
+    # threshold(3) real executions, then max_blocks(5) refusals, then abort
+    assert len(calls) == 3
+    assert refusals == 7  # 3 real + 4 refusals before the 5th raises
+
+
+@pytest.mark.asyncio
+async def test_abort_bubbles_up_through_toolnode() -> None:
+    """ToolNode re-raises GraphBubbleUp before its generic handler; keep that true."""
+    from langgraph.errors import GraphBubbleUp
+
+    assert issubclass(ToolLoopAbort, GraphBubbleUp)
+
+
+@pytest.mark.asyncio
+async def test_different_call_clears_the_block_counter() -> None:
+    guard = ToolLoopGuardMiddleware(threshold=2, max_blocks=3)
+    calls: list[str] = []
+    h = _handler(calls, content=_OK, status="success")
+
+    for i in range(6):
+        await guard.awrap_tool_call(_request("ls", {"path": "/"}, f"a{i}"), h)
+        await guard.awrap_tool_call(_request("read_file", {"path": "x"}, f"b{i}"), h)
+
+    assert len(calls) == 12
+
+
+@pytest.mark.asyncio
+async def test_error_result_does_not_trip_the_guard() -> None:
+    """A failing-but-alternating call is normal work, not a loop."""
+    guard = ToolLoopGuardMiddleware(threshold=2, max_blocks=3)
+    calls: list[str] = []
+    for i in range(9):
+        h = _handler(calls, content=_ERR if i % 2 == 0 else "other", status="error")
+        await guard.awrap_tool_call(_request("t", {"n": i}, f"c{i}"), h)
+    assert len(calls) == 9
