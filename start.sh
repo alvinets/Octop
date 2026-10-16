@@ -39,13 +39,22 @@ find_running_pid() {
     if [[ -f "$PID_FILE" ]]; then
         local pid
         pid="$(tr -dc '0-9' < "$PID_FILE" 2>/dev/null)"
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        if [[ -n "$pid" ]] && pid_alive "$pid"; then
             echo "$pid"
             return 0
         fi
     fi
     # The bracket keeps this pattern from matching the pgrep command itself.
-    pgrep -f "[.]venv/bin/octop run" 2>/dev/null | head -1
+    # The port is part of the match on purpose: an instance on a different
+    # port (or a different user's data dir) must not block this one.
+    pgrep -f "[.]venv/bin/octop run .*--port[ =]${PORT}([^0-9]|$)" 2>/dev/null | head -1
+}
+
+# /proc is authoritative for existence; `kill -0` also fails with EPERM for a
+# live process owned by another user, which is indistinguishable from ESRCH.
+pid_alive() {
+    [[ -d "/proc/$1" ]] && return 0
+    kill -0 "$1" 2>/dev/null
 }
 
 # --- preflight -------------------------------------------------------------
