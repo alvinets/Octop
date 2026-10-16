@@ -3610,7 +3610,10 @@ class AgentManager:
         # would be normalised to `ls "."` and escape the repeat detection.
         agent_middleware: list[Any] = [
             ToolLoopGuardMiddleware(),
-            WorkspaceRootAliasMiddleware(),
+            WorkspaceRootAliasMiddleware(
+                workspace_dir=harness_workspace,
+                backend_spec=backend,
+            ),
             *plugin_middleware,
             TokenQuotaMiddleware(
                 policy_repo=self._repos.user_policy_repo,
