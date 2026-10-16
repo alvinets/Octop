@@ -37,12 +37,27 @@ find_running_pid() {
     if [[ -f "$PID_FILE" ]]; then
         local pid
         pid="$(tr -dc '0-9' < "$PID_FILE" 2>/dev/null)"
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        if [[ -n "$pid" ]] && pid_alive "$pid"; then
             echo "$pid"
             return 0
         fi
     fi
-    pgrep -f "[.]venv/bin/octop run" 2>/dev/null | head -1
+    # Match this port too: an instance on another port (or another user's data
+    # dir) must not be mistaken for ours.
+    pgrep -f "[.]venv/bin/octop run .*--port[ =]${PORT}([^0-9]|$)" 2>/dev/null | head -1
+}
+
+# `kill -0` reports EPERM (non-zero) for a live process owned by another user,
+# which is indistinguishable from ESRCH by exit code alone. /proc is
+# authoritative for existence, so liveness must not rely on kill -0.
+pid_alive() {
+    [[ -d "/proc/$1" ]] && return 0
+    kill -0 "$1" 2>/dev/null
+}
+
+# True when we are permitted to signal the pid (i.e. it is ours).
+can_signal() {
+    kill -0 "$1" 2>/dev/null
 }
 
 pid="$(find_running_pid)"
@@ -57,22 +72,28 @@ if [[ -z "$pid" ]]; then
     exit 0
 fi
 
+if ! can_signal "$pid"; then
+    warn "pid $pid is alive but owned by another user — cannot signal it."
+    warn "run: sudo kill $pid   (nothing was stopped)"
+    exit 1
+fi
+
 info "stopping pid $pid (SIGTERM, waiting up to ${TIMEOUT}s)…"
 kill -TERM "$pid" 2>/dev/null || true
 
 deadline=$((SECONDS + TIMEOUT))
 while ((SECONDS < deadline)); do
-    kill -0 "$pid" 2>/dev/null || break
+    pid_alive "$pid" || break
     sleep 1
 done
 
-if kill -0 "$pid" 2>/dev/null; then
+if pid_alive "$pid"; then
     warn "still alive after ${TIMEOUT}s — sending SIGKILL"
     kill -KILL "$pid" 2>/dev/null || true
     sleep 2
 fi
 
-if kill -0 "$pid" 2>/dev/null; then
+if pid_alive "$pid"; then
     warn "pid $pid survives SIGKILL; inspect it manually"
     exit 1
 fi
