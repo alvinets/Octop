@@ -35,6 +35,7 @@ would point the agent at a directory that does not exist.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import posixpath
 from collections.abc import Awaitable, Callable
@@ -70,6 +71,11 @@ _PATH_TOOL_BASES = frozenset(
 )
 
 _PATH_ARG_KEYS = ("path", "file_path", "filepath", "target_path", "dir", "directory")
+
+# Tools that operate on files only; a directory at the resolved path is an error.
+FILE_TOOL_BASES = frozenset(
+    {"read_file", "write_file", "edit_file", "send_file", "send_file_to_user"}
+)
 
 # glob's pattern is a path pattern, so a relative one is workspace intent.
 # grep is excluded: its pattern is a regex, never a path.
@@ -146,6 +152,29 @@ def rewrite_workspace_paths(
     return {**tool_call, "args": new_args}
 
 
+def _file_tool_directory_hint(tool_call: ToolCall, workspace_dir: Path) -> str | None:
+    """Return a model-facing error when a file-only tool targets a directory."""
+    base = tool_name_base(str(tool_call.get("name") or "")).lower()
+    if base not in FILE_TOOL_BASES:
+        return None
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
+        return None
+    ws = str(workspace_dir)
+    for key in _PATH_ARG_KEYS:
+        path = args.get(key)
+        if not isinstance(path, str):
+            continue
+        p = Path(path)
+        if p.exists() and p.is_dir():
+            return (
+                f"`{path}` is a directory, but `{base}` needs a file path.\n"
+                f"Your workspace is `{ws}`. Pass a file path inside it — for example "
+                f"`generated/<name>.md` — not the workspace root."
+            )
+    return None
+
+
 class WorkspaceRootAliasMiddleware(AgentMiddleware[Any, Any]):
     """Point workspace-intent tool paths at the agent workspace, keep host paths as-is."""
 
@@ -174,27 +203,50 @@ class WorkspaceRootAliasMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        rewritten = self._rewrite(request)
-        if rewritten is None:
-            return await handler(request)
-        logger.info(
-            "WorkspaceRootAlias redirected %s into the workspace",
-            str(request.tool_call.get("name")),
-        )
-        return await handler(rewritten)
+        if self._workspace is not None and self._host_mounted:
+            rewritten = self._rewrite(request)
+            check_call = rewritten.tool_call if rewritten is not None else request.tool_call
+            dir_hint = await asyncio.to_thread(
+                _file_tool_directory_hint, check_call, self._workspace
+            )
+            if dir_hint is not None:
+                return ToolMessage(
+                    content=dir_hint,
+                    tool_call_id=str(request.tool_call.get("id") or ""),
+                    status="error",
+                )
+            if rewritten is None:
+                return await handler(request)
+            logger.info(
+                "WorkspaceRootAlias redirected %s into the workspace",
+                str(request.tool_call.get("name")),
+            )
+            return await handler(rewritten)
+        return await handler(request)
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
-        rewritten = self._rewrite(request)
-        if rewritten is None:
-            return handler(request)
-        return handler(rewritten)
+        if self._workspace is not None and self._host_mounted:
+            rewritten = self._rewrite(request)
+            check_call = rewritten.tool_call if rewritten is not None else request.tool_call
+            dir_hint = _file_tool_directory_hint(check_call, self._workspace)
+            if dir_hint is not None:
+                return ToolMessage(
+                    content=dir_hint,
+                    tool_call_id=str(request.tool_call.get("id") or ""),
+                    status="error",
+                )
+            if rewritten is None:
+                return handler(request)
+            return handler(rewritten)
+        return handler(request)
 
 
 __all__ = [
+    "FILE_TOOL_BASES",
     "WorkspaceRootAliasMiddleware",
     "is_host_mounted_backend",
     "resolve_workspace_intent",

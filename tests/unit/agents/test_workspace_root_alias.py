@@ -182,3 +182,141 @@ async def test_passthrough_when_nothing_to_rewrite() -> None:
     original = _call("execute", {"command": "ls /"})
     await middleware.awrap_tool_call(Req(original), handler)  # type: ignore[arg-type]
     assert seen == [{"command": "ls /"}]
+
+
+@pytest.mark.asyncio
+async def test_write_file_to_directory_returns_error_on_local_backend(tmp_path: Path) -> None:
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("write_file", {"file_path": str(tmp_path)})), handler
+    )
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "is a directory" in result.content
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_read_file_to_directory_returns_error_on_local_backend(tmp_path: Path) -> None:
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("read_file", {"path": str(tmp_path)})), handler
+    )
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "is a directory" in result.content
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_absolute_host_directory_outside_workspace_returns_error(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    workspace = tmp_path_factory.mktemp("workspace")
+    host_dir = tmp_path_factory.mktemp("host")
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=workspace, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("read_file", {"file_path": str(host_dir)})), handler
+    )
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "is a directory" in result.content
+    assert str(host_dir) in result.content
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_directory_check_skipped_for_docker_backend(tmp_path: Path) -> None:
+    middleware = WorkspaceRootAliasMiddleware(
+        workspace_dir=tmp_path, backend_spec={"type": "docker"}
+    )
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("write_file", {"file_path": str(tmp_path)})), handler
+    )
+    assert called
+    assert isinstance(result, ToolMessage)
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_directory_check_skipped_for_remote_backend(tmp_path: Path) -> None:
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec={"type": "s3"})
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("write_file", {"file_path": str(tmp_path)})), handler
+    )
+    assert called
+    assert isinstance(result, ToolMessage)
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_normal_file_path_invokes_handler(tmp_path: Path) -> None:
+    file_path = tmp_path / "test.txt"
+    file_path.write_text("hello")
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("read_file", {"file_path": str(file_path)})), handler
+    )
+    assert called
+    assert isinstance(result, ToolMessage)
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_nonexistent_path_invokes_handler(tmp_path: Path) -> None:
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    result = await middleware.awrap_tool_call(
+        Req(_call("write_file", {"file_path": str(tmp_path / "nonexistent")})), handler
+    )
+    assert called
+    assert isinstance(result, ToolMessage)
+    assert result.content == "ok"
