@@ -3718,7 +3718,7 @@ class AgentManager:
         # must see the arguments the model actually emitted, or a repeated `ls "/"`
         # would be normalised to `ls "."` and escape the repeat detection.
         agent_middleware: list[Any] = [
-            ToolLoopGuardMiddleware(),
+            ToolLoopGuardMiddleware(workspace_dir=harness_workspace),
             WorkspaceRootAliasMiddleware(
                 workspace_dir=harness_workspace,
                 backend_spec=backend,
