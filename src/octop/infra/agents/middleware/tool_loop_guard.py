@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -34,6 +35,9 @@ from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
+
+from octop.infra.agents.middleware.workspace_root_alias import FILE_TOOL_BASES
+from octop.infra.gateway.media.tool_media import tool_name_base
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +71,11 @@ class ToolLoopGuardMiddleware(AgentMiddleware[Any, Any]):
         self,
         threshold: int = DEFAULT_THRESHOLD,
         max_blocks: int = DEFAULT_MAX_BLOCKS,
+        workspace_dir: Path | None = None,
     ) -> None:
         self._threshold = max(1, int(threshold))
         self._max_blocks = max(1, int(max_blocks))
+        self._workspace = workspace_dir.expanduser().resolve() if workspace_dir else None
         self._signature: tuple[str, str] | None = None
         self._streak = 0
         self._blocks = 0
@@ -80,15 +86,27 @@ class ToolLoopGuardMiddleware(AgentMiddleware[Any, Any]):
         self._blocks = 0
 
     def _blocked_message(self, tool_name: str, args_fp: str) -> str:
-        return (
+        base = tool_name_base(tool_name).lower()
+        lines = [
             f"{tool_name} has already been called with these exact arguments "
             f"{self._threshold} times and returned the same result each time. "
             f"Repeating it cannot produce a different answer.\n"
             f"args: {args_fp}\n"
             f"You already have this result. Act on it, or change your approach: "
             f"narrow the path (for example `ls generated` instead of `ls .`), use a "
-            f"different tool, or tell the user what is blocking you."
-        )
+            f"different tool, or tell the user what is blocking you.",
+        ]
+        ws = str(self._workspace) if self._workspace else None
+        if base == "execute":
+            extra = f" (`{ws}`)" if ws else ""
+            lines.append(
+                f"`execute` already runs inside your workspace{extra}, "
+                f"so no `cd` is needed — run the command directly, e.g. `ls generated`."
+            )
+        elif base in FILE_TOOL_BASES:
+            extra = f"; your workspace is `{ws}`, e.g. `generated/<name>.md`" if ws else ""
+            lines.append(f"`{base}` needs a file path, not a directory{extra}.")
+        return "\n".join(lines)
 
     async def awrap_tool_call(
         self,

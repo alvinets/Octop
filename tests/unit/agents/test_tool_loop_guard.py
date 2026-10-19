@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -175,3 +176,40 @@ async def test_error_result_does_not_trip_the_guard() -> None:
         h = _handler(calls, content=_ERR if i % 2 == 0 else "other", status="error")
         await guard.awrap_tool_call(_request("t", {"n": i}, f"c{i}"), h)
     assert len(calls) == 9
+
+
+@pytest.mark.asyncio
+async def test_execute_refusal_mentions_no_cd_needed(tmp_path: Path) -> None:
+    guard = ToolLoopGuardMiddleware(threshold=1, workspace_dir=tmp_path)
+    calls: list[str] = []
+    h = _handler(calls, content=_OK, status="success")
+    await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c0"), h)
+    await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c1"), h)
+    assert len(calls) == 1
+    blocked = await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c2"), h)
+    assert "no `cd` is needed" in blocked.content
+    assert str(tmp_path) in blocked.content
+
+
+@pytest.mark.asyncio
+async def test_execute_refusal_without_workspace(tmp_path: Path) -> None:
+    guard = ToolLoopGuardMiddleware(threshold=1)
+    calls: list[str] = []
+    h = _handler(calls, content=_OK, status="success")
+    await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c0"), h)
+    await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c1"), h)
+    blocked = await guard.awrap_tool_call(_request("execute", {"command": "ls"}, "c2"), h)
+    assert "no `cd` is needed" in blocked.content
+    assert str(tmp_path) not in blocked.content
+
+
+@pytest.mark.asyncio
+async def test_file_tool_refusal_mentions_needs_file_path(tmp_path: Path) -> None:
+    guard = ToolLoopGuardMiddleware(threshold=1, workspace_dir=tmp_path)
+    calls: list[str] = []
+    h = _handler(calls, content=_ERR, status="error")
+    await guard.awrap_tool_call(_request("write_file", {"file_path": "/"}, "c0"), h)
+    await guard.awrap_tool_call(_request("write_file", {"file_path": "/"}, "c1"), h)
+    blocked = await guard.awrap_tool_call(_request("write_file", {"file_path": "/"}, "c2"), h)
+    assert "needs a file path, not a directory" in blocked.content
+    assert str(tmp_path) in blocked.content
