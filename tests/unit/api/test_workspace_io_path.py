@@ -49,6 +49,5 @@ def test_default_from_workspace_is_true() -> None:
 
 def test_host_absolute_requires_explicit_opt_out() -> None:
     assert (
-        _workspace_io_path("/home/kzhy/file.docx", from_workspace=False)
-        == "/home/kzhy/file.docx"
+        _workspace_io_path("/home/kzhy/file.docx", from_workspace=False) == "/home/kzhy/file.docx"
     )
