@@ -10,7 +10,10 @@ set -uo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OCTOP_BIN="$PROJECT_DIR/.venv/bin/octop"
-DATA_DIR="${OCTOP_HOME:-$HOME/.octop}"
+# Same resolution as start.sh: under `sudo` the data belongs to SUDO_USER, and
+# the pidfile must be looked up there or the running instance is never found.
+DATA_DIR="${OCTOP_HOME:-$(if [[ -n "${SUDO_USER:-}" ]]; then echo "/home/${SUDO_USER}/.octop"; else echo "$HOME/.octop"; fi)}"
+export OCTOP_HOME="$DATA_DIR"
 RUN_DIR="$DATA_DIR/run"
 LOG_FILE="$RUN_DIR/octop.log"
 PID_FILE="$RUN_DIR/octop.pid"

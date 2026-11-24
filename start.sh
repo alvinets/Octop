@@ -13,6 +13,10 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OCTOP_BIN="$PROJECT_DIR/.venv/bin/octop"
 # Resolve data directory: OCTOP_HOME > original user home (via SUDO_USER) > $HOME
     DATA_DIR="${OCTOP_HOME:-$(if [[ -n "${SUDO_USER:-}" ]]; then echo "/home/${SUDO_USER}/.octop"; else echo "$HOME/.octop"; fi)}"
+# The server resolves its own root from OCTOP_HOME (falling back to $HOME), so it
+# must be exported — under `sudo` the child would otherwise use /root/.octop and
+# bootstrap a second, empty database.
+export OCTOP_HOME="$DATA_DIR"
 RUN_DIR="$DATA_DIR/run"
 LOG_FILE="$RUN_DIR/octop.log"
 PID_FILE="$RUN_DIR/octop.pid"
