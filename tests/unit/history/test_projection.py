@@ -174,3 +174,130 @@ async def test_backfill_queue_runs_one_job_at_a_time_and_dedupes() -> None:
     assert queue.available_slots == 2
     assert queue.contains("thr-1") is False
     await queue.close()
+
+
+def test_multistep_turn_no_extra_concatenated_ai_message() -> None:
+    """Multi-step turn where all step texts are present in state must NOT
+    append a bogus concatenated assistant message."""
+    t = TurnHistoryTracker.from_request({"messages": []})
+    t.observe({"type": "token", "content": "Let me create the file.\n\n"})
+    t.observe({"type": "token", "content": "Now I'll build the docs.\n\n"})
+    t.observe(
+        {
+            "type": "state_snapshot",
+            "data": {
+                "messages": [
+                    {"type": "human", "content": "do the task", "id": "h1"},
+                    {
+                        "type": "ai",
+                        "content": "Let me create the file.\n\n",
+                        "id": "a1",
+                        "tool_calls": [{"name": "write_file", "args": {}, "id": "c1"}],
+                    },
+                    {"type": "tool", "content": "ok", "id": "t1", "tool_call_id": "c1"},
+                    {
+                        "type": "ai",
+                        "content": "Now I'll build the docs.\n\n",
+                        "id": "a2",
+                        "tool_calls": [{"name": "execute", "args": {}, "id": "c2"}],
+                    },
+                ]
+            },
+        }
+    )
+
+    ai_items = [item for item in t.inputs if item.role in ("ai", "assistant")]
+    assert len(ai_items) == 2
+    texts = [_wire_text(item) for item in ai_items]
+    assert "Let me create the file.\n\n" in texts
+    assert "Now I'll build the docs.\n\n" in texts
+
+
+def test_cancelled_turn_appends_only_uncovered_final_segment() -> None:
+    """Turn cancelled before the final answer: append ONLY the uncovered final
+    segment, never the concatenation of earlier preambles."""
+    t = TurnHistoryTracker.from_request({"messages": []})
+    t.observe({"type": "token", "content": "Step one text.\n\n"})
+    t.observe(
+        {
+            "type": "state_snapshot",
+            "data": {
+                "messages": [
+                    {"type": "human", "content": "do it", "id": "h1"},
+                    {
+                        "type": "ai",
+                        "content": "Step one text.\n\n",
+                        "id": "a1",
+                        "tool_calls": [{"name": "write_file", "args": {}, "id": "c1"}],
+                    },
+                    {"type": "tool", "content": "ok", "id": "t1", "tool_call_id": "c1"},
+                ]
+            },
+        }
+    )
+    t.observe({"type": "token", "content": "Step two partial...\n\n"})
+    t.observe({"type": "token", "content": "Still typing"})
+
+    ai_items = [item for item in t.inputs if item.role in ("ai", "assistant")]
+    texts = [_wire_text(item) for item in ai_items]
+    concat = "Step one text.\n\nStep two partial...\n\nStill typing"
+    assert concat not in texts
+    assert "Step two partial...\n\nStill typing" in texts
+
+
+def test_single_step_no_state_appends_streamed_text_once() -> None:
+    """Single-step turn with no state messages: append the streamed text
+    exactly once (preserve today's behavior)."""
+    t = TurnHistoryTracker.from_request({"messages": []})
+    t.observe({"type": "token", "content": "hello"})
+    t.observe({"type": "token", "content": " world"})
+
+    ai_items = [item for item in t.inputs if item.role in ("ai", "assistant")]
+    assert len(ai_items) == 1
+    assert _wire_text(ai_items[0]) == "hello world"
+
+
+def test_empty_stream_no_reasoning_appends_nothing() -> None:
+    """Empty stream + no reasoning: append nothing (preserve)."""
+    t = TurnHistoryTracker.from_request(
+        {"messages": [{"type": "human", "content": "hi", "id": "h1"}]}
+    )
+
+    ai_items = [item for item in t.inputs if item.role in ("ai", "assistant")]
+    assert len(ai_items) == 0
+
+
+def test_reasoning_follows_same_segmentation() -> None:
+    """Reasoning text follows the same segmentation; each segment carries its
+    own reasoning_content in additional_kwargs."""
+    t = TurnHistoryTracker.from_request({"messages": []})
+    t.observe({"type": "reasoning", "content": "think1"})
+    t.observe({"type": "token", "content": "answer1"})
+    t.observe(
+        {
+            "type": "state_snapshot",
+            "data": {
+                "messages": [
+                    {"type": "human", "content": "do it", "id": "h1"},
+                    {
+                        "type": "ai",
+                        "content": "answer1",
+                        "id": "a1",
+                        "tool_calls": [{"name": "tool1", "args": {}, "id": "c1"}],
+                    },
+                    {"type": "tool", "content": "ok", "id": "t1", "tool_call_id": "c1"},
+                ]
+            },
+        }
+    )
+    t.observe({"type": "reasoning", "content": "think2"})
+    t.observe({"type": "token", "content": "answer2"})
+
+    ai_items = [item for item in t.inputs if item.role in ("ai", "assistant")]
+    assert len(ai_items) == 2
+    texts = [_wire_text(item) for item in ai_items]
+    assert "answer1" in texts
+    assert "answer2" in texts
+
+    extra2 = json.loads(ai_items[1].message_json)["data"].get("additional_kwargs", {})
+    assert extra2.get("reasoning_content") == "think2"

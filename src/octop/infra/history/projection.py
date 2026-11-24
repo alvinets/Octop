@@ -157,8 +157,8 @@ class TurnHistoryTracker:
 
     seed_messages: list[Any] = field(default_factory=list)
     _state_messages: list[Any] = field(default_factory=list, init=False)
-    _stream_text: str = field(default="", init=False)
-    _reasoning_text: str = field(default="", init=False)
+    _segments: list[tuple[str, str]] = field(default_factory=list, init=False)
+    _current: tuple[str, str] = field(default=("", ""), init=False)
     _error_message: str = field(default="", init=False)
     _error_code: str | None = field(default=None, init=False)
 
@@ -166,6 +166,46 @@ class TurnHistoryTracker:
     def from_request(cls, request: dict[str, Any]) -> TurnHistoryTracker:
         raw = request.get("messages")
         return cls(seed_messages=list(raw) if isinstance(raw, list) else [])
+
+    @staticmethod
+    def _message_text(message: Any) -> str:
+        if isinstance(message, dict):
+            content = message.get("content")
+        else:
+            content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    parts.append(str(block.get("text") or ""))
+            return "".join(parts)
+        return ""
+
+    @classmethod
+    def _assistant_texts(cls, messages: list[Any]) -> list[str]:
+        return [cls._message_text(msg) for msg in messages if _role(msg) in _ASSISTANT_ROLES]
+
+    @staticmethod
+    def _covered(text: str, assistant_texts: list[str]) -> bool:
+        """True when *text* is already present in the transcript texts."""
+        if not text.strip():
+            return True
+        if any(text in seen for seen in assistant_texts):
+            return True
+        # One stream buffer may span several consecutive assistant messages.
+        return text in "".join(assistant_texts)
+
+    def _take_current(self) -> tuple[str, str] | None:
+        """Finalize the in-flight segment. Returns ``None`` when it is blank."""
+        current = self._current
+        self._current = ("", "")
+        if not current[0].strip() and not current[1].strip():
+            return None
+        return current
 
     def observe(self, chunk: dict[str, Any]) -> None:
         kind = chunk.get("type")
@@ -177,16 +217,27 @@ class TurnHistoryTracker:
                 (index for index, msg in enumerate(messages) if _role(msg) in _USER_ROLES),
                 default=-1,
             )
-            if last_user >= 0:
-                self._state_messages = messages[last_user:]
-            else:
-                self._state_messages.extend(messages)
+            new_state = messages[last_user:] if last_user >= 0 else self._state_messages + messages
+            texts = self._assistant_texts(new_state)
+            # Segments already persisted by this checkpoint are no longer ours.
+            self._segments = [
+                segment for segment in self._segments if not self._covered(segment[0], texts)
+            ]
+            pending = self._take_current()
+            if pending is not None and not self._covered(pending[0], texts):
+                self._segments.append(pending)
+            self._state_messages = new_state
+            return
+        if kind == "tool_result":
+            pending = self._take_current()
+            if pending is not None:
+                self._segments.append(pending)
             return
         if kind == "token":
-            self._stream_text += str(chunk.get("content") or "")
+            self._current = (self._current[0] + str(chunk.get("content") or ""), self._current[1])
             return
         if kind == "reasoning":
-            self._reasoning_text += str(chunk.get("content") or "")
+            self._current = (self._current[0], self._current[1] + str(chunk.get("content") or ""))
             return
         if kind == "error":
             text = str(chunk.get("message") or chunk.get("content") or "")
@@ -196,13 +247,11 @@ class TurnHistoryTracker:
             if code:
                 self._error_code = str(code)
 
-    def _stream_message(self) -> ThreadMessageInput | None:
-        if not self._stream_text and not self._reasoning_text:
-            return None
+    def _segment_stream_message(self, text: str, reasoning: str) -> ThreadMessageInput | None:
         extra: dict[str, Any] = {}
-        if self._reasoning_text:
-            extra["reasoning_content"] = self._reasoning_text
-        return live_message_input(AIMessage(content=self._stream_text, additional_kwargs=extra))
+        if reasoning.strip():
+            extra["reasoning_content"] = reasoning
+        return live_message_input(AIMessage(content=text, additional_kwargs=extra))
 
     def _error_input(self) -> ThreadMessageInput | None:
         if not self._error_message:
@@ -211,14 +260,6 @@ class TurnHistoryTracker:
         if self._error_code:
             extra[STREAM_ERROR_CODE_KEY] = self._error_code
         return live_message_input(AIMessage(content=self._error_message, additional_kwargs=extra))
-
-    def _inputs_cover_stream(self, items: list[ThreadMessageInput]) -> bool:
-        if not self._stream_text:
-            return False
-        return any(
-            item.role in _ASSISTANT_ROLES and self._stream_text in _wire_text(item)
-            for item in items
-        )
 
     @property
     def inputs(self) -> list[ThreadMessageInput]:
@@ -230,10 +271,18 @@ class TurnHistoryTracker:
             source,
             dedupe_missing_ids=True,
         )
-        if not self._inputs_cover_stream(items):
-            streamed = self._stream_message()
+        texts = [_wire_text(item) for item in items if item.role in _ASSISTANT_ROLES]
+        segments = list(self._segments)
+        if self._current[0].strip() or self._current[1].strip():
+            segments.append(self._current)
+        emitted: list[str] = []
+        for stream_text, reasoning_text in segments:
+            if self._covered(stream_text, [*texts, *emitted]):
+                continue
+            streamed = self._segment_stream_message(stream_text, reasoning_text)
             if streamed is not None:
                 items.append(streamed)
+                emitted.append(_wire_text(streamed))
         error = self._error_input()
         if error is not None:
             items.append(error)
