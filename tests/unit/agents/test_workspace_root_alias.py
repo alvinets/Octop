@@ -320,3 +320,27 @@ async def test_nonexistent_path_invokes_handler(tmp_path: Path) -> None:
     assert called
     assert isinstance(result, ToolMessage)
     assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_unstattable_path_does_not_escape_as_oserror(tmp_path: Path) -> None:
+    """A corrupt model argument can exceed PATH_MAX; the hint probe must not kill the turn.
+
+    ``Path.exists()`` ignores ENOENT but re-raises ENAMETOOLONG, which used to
+    propagate out of the middleware and abort the whole stream.
+    """
+    middleware = WorkspaceRootAliasMiddleware(workspace_dir=tmp_path, backend_spec=HOST)
+    called = False
+
+    async def handler(request: Any) -> ToolMessage:
+        nonlocal called
+        called = True
+        return ToolMessage(content="ok", tool_call_id="c1", status="success")
+
+    bogus = str(tmp_path / ("x" * 5000))
+    result = await middleware.awrap_tool_call(
+        Req(_call("edit_file", {"file_path": bogus})), handler
+    )
+    assert called
+    assert isinstance(result, ToolMessage)
+    assert result.content == "ok"

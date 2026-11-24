@@ -152,6 +152,19 @@ def rewrite_workspace_paths(
     return {**tool_call, "args": new_args}
 
 
+def _is_directory(raw: str) -> bool:
+    """True only when *raw* names an existing directory.
+
+    ``Path.is_dir`` swallows ENOENT but re-raises ``ENAMETOOLONG``, so one corrupt
+    model argument used to escape this middleware as ``OSError`` and abort the whole
+    stream. A path we cannot stat is simply not a directory.
+    """
+    try:
+        return Path(raw).is_dir()
+    except (OSError, ValueError):
+        return False
+
+
 def _file_tool_directory_hint(tool_call: ToolCall, workspace_dir: Path) -> str | None:
     """Return a model-facing error when a file-only tool targets a directory."""
     base = tool_name_base(str(tool_call.get("name") or "")).lower()
@@ -165,8 +178,7 @@ def _file_tool_directory_hint(tool_call: ToolCall, workspace_dir: Path) -> str |
         path = args.get(key)
         if not isinstance(path, str):
             continue
-        p = Path(path)
-        if p.exists() and p.is_dir():
+        if _is_directory(path):
             return (
                 f"`{path}` is a directory, but `{base}` needs a file path.\n"
                 f"Your workspace is `{ws}`. Pass a file path inside it — for example "
