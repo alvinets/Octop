@@ -213,3 +213,19 @@ async def test_file_tool_refusal_mentions_needs_file_path(tmp_path: Path) -> Non
     blocked = await guard.awrap_tool_call(_request("write_file", {"file_path": "/"}, "c2"), h)
     assert "needs a file path, not a directory" in blocked.content
     assert str(tmp_path) in blocked.content
+
+
+@pytest.mark.asyncio
+async def test_oversized_argument_is_rejected_without_executing() -> None:
+    """A runaway generation must not reach the tool: an `execute` command runs for real."""
+    guard = ToolLoopGuardMiddleware(max_arg_chars=1000)
+    calls: list[str] = []
+    result = await guard.awrap_tool_call(
+        _request("execute", {"command": "x" * 5000}, "c1"),
+        _handler(calls, content=_OK, status="success"),
+    )
+    assert calls == []
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "too large" in str(result.content)
+    assert "command" in str(result.content)

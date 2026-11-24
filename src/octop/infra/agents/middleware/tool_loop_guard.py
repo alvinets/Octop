@@ -45,6 +45,11 @@ DEFAULT_THRESHOLD = 3
 DEFAULT_MAX_BLOCKS = 8
 _MAX_ARGS_CHARS = 400
 
+# A single string argument beyond this is not a real request: it is a truncated
+# or repeating generation. Executing it would write megabytes of garbage (an
+# `execute` command runs for real), so it is rejected before the tool sees it.
+DEFAULT_MAX_ARG_CHARS = 100_000
+
 
 class ToolLoopAbort(RuntimeError, GraphBubbleUp):
     """Ends a turn stuck re-issuing one identical call past the block cap.
@@ -64,6 +69,16 @@ def _args_fingerprint(args: Any) -> str:
     return text[:_MAX_ARGS_CHARS]
 
 
+def _oversized_arg(args: Any, limit: int) -> tuple[str, int] | None:
+    """Return the first string argument larger than *limit*, with its length."""
+    if not isinstance(args, dict):
+        return None
+    for key, value in args.items():
+        if isinstance(value, str) and len(value) > limit:
+            return str(key), len(value)
+    return None
+
+
 class ToolLoopGuardMiddleware(AgentMiddleware[Any, Any]):
     """Stop a call repeated identically ``threshold`` times; abort the turn after ``max_blocks``."""
 
@@ -72,9 +87,11 @@ class ToolLoopGuardMiddleware(AgentMiddleware[Any, Any]):
         threshold: int = DEFAULT_THRESHOLD,
         max_blocks: int = DEFAULT_MAX_BLOCKS,
         workspace_dir: Path | None = None,
+        max_arg_chars: int = DEFAULT_MAX_ARG_CHARS,
     ) -> None:
         self._threshold = max(1, int(threshold))
         self._max_blocks = max(1, int(max_blocks))
+        self._max_arg_chars = max(1, int(max_arg_chars))
         self._workspace = workspace_dir.expanduser().resolve() if workspace_dir else None
         self._signature: tuple[str, str] | None = None
         self._streak = 0
@@ -117,6 +134,23 @@ class ToolLoopGuardMiddleware(AgentMiddleware[Any, Any]):
         tool_name = str(tool_call.get("name") or "")
         raw_args = tool_call.get("args") or {}
         args_fp = _args_fingerprint(raw_args if isinstance(raw_args, dict) else {})
+
+        oversized = _oversized_arg(raw_args, self._max_arg_chars)
+        if oversized is not None:
+            arg_name, arg_chars = oversized
+            logger.warning(
+                "ToolLoopGuard rejected %s: argument %r is %d chars", tool_name, arg_name, arg_chars
+            )
+            return ToolMessage(
+                content=(
+                    f"`{tool_name}` argument `{arg_name}` is {arg_chars} characters, which is "
+                    f"too large to execute — the model output was likely truncated or stuck "
+                    f"repeating. Retry with a smaller `{arg_name}` (for example, write the file "
+                    f"in smaller pieces)."
+                ),
+                tool_call_id=str(tool_call.get("id") or ""),
+                status="error",
+            )
 
         signature = (tool_name, args_fp)
         if signature != self._signature:
