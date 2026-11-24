@@ -60,6 +60,7 @@ from octop.infra.agents.settings.runtime_limits import (
 from octop.infra.agents.settings.runtime_limits import (
     resolve_context_max_tokens as config_context_max_tokens,
 )
+from octop.infra.agents.stream_guard import stream_guard
 from octop.infra.backend.docker_spec import (
     enrich_docker_backend_spec,
     inject_docker_global_environment,
@@ -1867,7 +1868,15 @@ class AgentManager:
                 hitl_thread_scope(thread_id_from_request(req)),
                 turn_model_scope(self._stream_model_label(agent_id, req, thread_id)),
             ):
-                async for chunk in self._harness_manager.stream(agent_id, cast(Any, req)):
+                idle_timeout_s = self._config.stream_idle_timeout_s
+                harness_stream = self._harness_manager.stream(agent_id, cast(Any, req))
+                async for chunk in stream_guard(
+                    harness_stream,
+                    idle_timeout_s=idle_timeout_s,
+                    cancel_stream=self.cancel_stream,
+                    agent_id=agent_id,
+                    thread_id=thread_id,
+                ):
                     yield chunk
             self._apply_pending_bootstrap_graph_refresh(agent_id)
 
@@ -1907,8 +1916,14 @@ class AgentManager:
                 hitl_thread_scope(thread_id),
                 turn_model_scope(self._stream_model_label(agent_id, {}, thread_id)),
             ):
-                async for chunk in self._harness_manager.resume_hitl(
-                    agent_id, thread_id, decisions
+                idle_timeout_s = self._config.stream_idle_timeout_s
+                harness_stream = self._harness_manager.resume_hitl(agent_id, thread_id, decisions)
+                async for chunk in stream_guard(
+                    harness_stream,
+                    idle_timeout_s=idle_timeout_s,
+                    cancel_stream=self.cancel_stream,
+                    agent_id=agent_id,
+                    thread_id=thread_id,
                 ):
                     yield chunk
             self._apply_pending_bootstrap_graph_refresh(agent_id)

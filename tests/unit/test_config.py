@@ -167,6 +167,26 @@ def test_browser_idle_timeout_defaults_and_can_be_disabled(tmp_path: Path):
     assert load_config(cfg_path).browser_idle_timeout_minutes == 0
 
 
+def test_stream_idle_timeout_defaults_and_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = load_config(tmp_path / "config.json")
+    assert cfg.stream_idle_timeout_s == 300
+
+    monkeypatch.setenv("OCTOP_STREAM_IDLE_TIMEOUT_S", "60")
+    cfg = load_config(tmp_path / "config.json")
+    assert cfg.stream_idle_timeout_s == 60
+
+    cfg_path = tmp_path / "zero.json"
+    cfg_path.write_text(json.dumps({"stream_idle_timeout_s": 0}))
+    monkeypatch.delenv("OCTOP_STREAM_IDLE_TIMEOUT_S")
+    assert load_config(cfg_path).stream_idle_timeout_s == 0
+
+    monkeypatch.setenv("OCTOP_STREAM_IDLE_TIMEOUT_S", "-5")
+    cfg = load_config(cfg_path)
+    assert cfg.stream_idle_timeout_s == 0
+
+
 def test_database_env_sqlite_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OCTOP_DATABASE_SQLITE_PATH", "/tmp/octop-test.db")
     cfg = load_config(tmp_path / "config.json")

@@ -189,6 +189,7 @@ Each variable, when set, takes precedence over the matching key in
 | `OCTOP_ENABLE_API_DOCS` | bool | `false` | Expose Scalar API docs at `/api/docs` |
 | `OCTOP_REQUIRE_SETUP_PASSWORD` | bool | `true` | Require wizard password during initial setup |
 | `OCTOP_MAX_UPLOAD_MB` | int | `100` | Max upload size in MiB for chat attachments, IM inbound, and knowledge documents (1–1024) |
+| `OCTOP_STREAM_IDLE_TIMEOUT_S` | int (seconds) | `300` | Abort a chat turn when the model stream sends no chunk for this long; time spent running a tool is excluded. `0` disables the deadline |
 | `OCTOP_DATABASE_URL` | string | empty | Full DSN — overrides the `OCTOP_DATABASE_*` fields below |
 | `OCTOP_DATABASE_DRIVER` | `sqlite` \| `postgresql` | `sqlite` | Storage backend |
 | `OCTOP_DATABASE_SQLITE_PATH` | path | `octop.db` | SQLite file path (relative to `OCTOP_HOME` unless absolute) |

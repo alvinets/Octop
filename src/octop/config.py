@@ -16,6 +16,7 @@ DEFAULT_MAX_UPLOAD_MB = 100
 MIN_MAX_UPLOAD_MB = 1
 MAX_MAX_UPLOAD_MB = 1024
 DEFAULT_BROWSER_IDLE_TIMEOUT_MINUTES = 30
+DEFAULT_STREAM_IDLE_TIMEOUT_S = 300
 
 _VALID_DRIVERS = frozenset({"sqlite", "postgresql"})
 
@@ -143,6 +144,7 @@ class OctopConfig:
     capabilities: CapabilitiesConfig = field(default_factory=CapabilitiesConfig)
     max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB
     browser_idle_timeout_minutes: int = DEFAULT_BROWSER_IDLE_TIMEOUT_MINUTES
+    stream_idle_timeout_s: int = DEFAULT_STREAM_IDLE_TIMEOUT_S
 
     @property
     def max_upload_bytes(self) -> int:
@@ -514,6 +516,17 @@ def load_config(path: Path) -> OctopConfig:
                 )
             ),
         )
+    if v := os.environ.get("OCTOP_STREAM_IDLE_TIMEOUT_S"):
+        merged["stream_idle_timeout_s"] = _coerce_int(
+            "OCTOP_STREAM_IDLE_TIMEOUT_S",
+            v,
+            int(
+                merged.get(
+                    "stream_idle_timeout_s",
+                    DEFAULT_STREAM_IDLE_TIMEOUT_S,
+                )
+            ),
+        )
 
     capabilities = _parse_capabilities_section(raw.get("capabilities"))
     if v := os.environ.get("OCTOP_ENABLE_MOBILE"):
@@ -627,6 +640,15 @@ def load_config(path: Path) -> OctopConfig:
                 merged.get(
                     "browser_idle_timeout_minutes",
                     DEFAULT_BROWSER_IDLE_TIMEOUT_MINUTES,
+                )
+            ),
+        ),
+        stream_idle_timeout_s=max(
+            0,
+            int(
+                merged.get(
+                    "stream_idle_timeout_s",
+                    DEFAULT_STREAM_IDLE_TIMEOUT_S,
                 )
             ),
         ),
