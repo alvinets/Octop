@@ -110,9 +110,11 @@ def classify_stream_error_message(message: str) -> str | None:
     if (
         "streamchunktimeouterror" in compact
         or "streamrepetitionerror" in compact
+        or "streamoutputlimiterror" in compact
         or "no streaming chunk received" in lower
         or "stream_chunk_timeout" in lower
         or "stream_repetition" in lower
+        or "stream_output_limit" in lower
     ):
         return STREAM_STALL
 

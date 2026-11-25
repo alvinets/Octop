@@ -11,7 +11,9 @@ import pytest
 from octop.i18n.domains.stream import STREAM_STALL, format_stream_error
 from octop.infra.agents.stream_guard import (
     StreamChunkTimeoutError,
+    StreamOutputLimitError,
     StreamRepetitionError,
+    _repetition,
     stream_guard,
 )
 
@@ -260,5 +262,135 @@ def test_stream_repetition_is_classified_as_stream_stall() -> None:
     from octop.i18n.domains.stream import classify_stream_error_message
 
     exc = StreamRepetitionError(period=120, repeats=34)
+    assert classify_stream_error_message(str(exc)) == STREAM_STALL
+    assert format_stream_error(exc, "zh")
+
+
+def test_short_period_needs_high_coverage() -> None:
+    """A 2-char loop is only flagged once it fills the short-period suffix bar."""
+    assert _repetition(".2" * 1000) is None  # 2000 chars < _REPEAT_SHORT_COVER
+    assert _repetition(".2" * 1024) == (2, 1024)
+
+
+@pytest.mark.asyncio
+async def test_two_char_repetition_aborts_the_turn() -> None:
+    """`.2.2.2...` used to slip through because the period was below 80 chars."""
+    cancelled: list[tuple[str, str]] = []
+
+    async def fake_stream() -> AsyncIterator[Any]:
+        for _ in range(1400):
+            yield {"type": "token", "content": ".2"}
+
+    guard = stream_guard(
+        fake_stream(),
+        idle_timeout_s=0,
+        cancel_stream=lambda agent, thread: cancelled.append((agent, thread)),
+        agent_id=AGENT_ID,
+        thread_id=THREAD_ID,
+    )
+    with pytest.raises(StreamRepetitionError) as exc_info:
+        async for _ in guard:
+            pass
+
+    assert cancelled == [(AGENT_ID, THREAD_ID)]
+    assert exc_info.value.period == 2
+    assert exc_info.value.repeats >= 1000
+
+
+@pytest.mark.asyncio
+async def test_single_char_repetition_aborts_the_turn() -> None:
+    async def fake_stream() -> AsyncIterator[Any]:
+        for _ in range(2600):
+            yield {"type": "token", "content": "每"}
+
+    guard = stream_guard(
+        fake_stream(),
+        idle_timeout_s=0,
+        cancel_stream=lambda *_: None,
+        agent_id=AGENT_ID,
+        thread_id=THREAD_ID,
+    )
+    with pytest.raises(StreamRepetitionError) as exc_info:
+        async for _ in guard:
+            pass
+
+    assert exc_info.value.period == 1
+
+
+@pytest.mark.asyncio
+async def test_repetition_after_prose_aborts_the_turn() -> None:
+    """Only the tail has to be periodic; the loop starts after normal output."""
+    prose = "".join(f"Step {i} explains a distinct part of the work.\n" for i in range(200))
+
+    async def fake_stream() -> AsyncIterator[Any]:
+        for start in range(0, len(prose), 500):
+            yield {"type": "token", "content": prose[start : start + 500]}
+        for _ in range(1400):
+            yield {"type": "token", "content": ".2"}
+
+    guard = stream_guard(
+        fake_stream(),
+        idle_timeout_s=0,
+        cancel_stream=lambda *_: None,
+        agent_id=AGENT_ID,
+        thread_id=THREAD_ID,
+    )
+    with pytest.raises(StreamRepetitionError) as exc_info:
+        async for _ in guard:
+            pass
+
+    assert exc_info.value.period == 2
+
+
+@pytest.mark.asyncio
+async def test_reasoning_repetition_aborts_the_turn() -> None:
+    async def fake_stream() -> AsyncIterator[Any]:
+        for _ in range(2600):
+            yield {"type": "reasoning", "content": "思"}
+
+    guard = stream_guard(
+        fake_stream(),
+        idle_timeout_s=0,
+        cancel_stream=lambda *_: None,
+        agent_id=AGENT_ID,
+        thread_id=THREAD_ID,
+    )
+    with pytest.raises(StreamRepetitionError) as exc_info:
+        async for _ in guard:
+            pass
+
+    assert exc_info.value.period == 1
+
+
+@pytest.mark.asyncio
+async def test_output_limit_caps_a_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    import octop.infra.agents.stream_guard as guard_module
+
+    monkeypatch.setattr(guard_module, "_MAX_TURN_CHARS", 100)
+    cancelled: list[tuple[str, str]] = []
+
+    async def fake_stream() -> AsyncIterator[Any]:
+        for i in range(50):
+            yield {"type": "token", "content": f"word{i} "}
+
+    guard = stream_guard(
+        fake_stream(),
+        idle_timeout_s=0,
+        cancel_stream=lambda agent, thread: cancelled.append((agent, thread)),
+        agent_id=AGENT_ID,
+        thread_id=THREAD_ID,
+    )
+    with pytest.raises(StreamOutputLimitError) as exc_info:
+        async for _ in guard:
+            pass
+
+    assert cancelled == [(AGENT_ID, THREAD_ID)]
+    assert exc_info.value.chars >= 100
+
+
+def test_stream_output_limit_is_classified_as_stream_stall() -> None:
+    from octop.i18n.domains.stream import classify_stream_error_message
+
+    exc = StreamOutputLimitError(chars=200_000)
     assert classify_stream_error_message(str(exc)) == STREAM_STALL
     assert format_stream_error(exc, "zh")
