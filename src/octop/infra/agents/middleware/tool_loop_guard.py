@@ -48,7 +48,7 @@ _MAX_ARGS_CHARS = 400
 # A single string argument beyond this is not a real request: it is a truncated
 # or repeating generation. Executing it would write megabytes of garbage (an
 # `execute` command runs for real), so it is rejected before the tool sees it.
-DEFAULT_MAX_ARG_CHARS = 100_000
+DEFAULT_MAX_ARG_CHARS = 16_384
 
 
 class ToolLoopAbort(RuntimeError, GraphBubbleUp):

@@ -229,3 +229,19 @@ async def test_oversized_argument_is_rejected_without_executing() -> None:
     assert result.status == "error"
     assert "too large" in str(result.content)
     assert "command" in str(result.content)
+
+
+@pytest.mark.asyncio
+async def test_default_limit_rejects_runaway_path_argument() -> None:
+    """A 20k-char filename is degeneration, not a real path."""
+    guard = ToolLoopGuardMiddleware()
+    calls: list[str] = []
+    runaway = "mastermind" + ".2" * 9000 + ".css"
+    result = await guard.awrap_tool_call(
+        _request("write_file", {"file_path": runaway}, "c1"),
+        _handler(calls, content=_OK, status="success"),
+    )
+    assert calls == []
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "too large" in str(result.content)
